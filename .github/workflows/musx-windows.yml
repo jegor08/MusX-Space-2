@@ -1,0 +1,71 @@
+name: MusX Windows Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/musx-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Restore project layout in the build workspace
+        shell: pwsh
+        run: |
+          $files = @{
+            '__init__.py'    = 'musx/__init__.py'
+            'binance.py'     = 'musx/binance.py'
+            'engine.py'      = 'musx/engine.py'
+            'test_engine.py' = 'tests/test_engine.py'
+            'MusX.iss'       = 'installer/MusX.iss'
+          }
+          foreach ($entry in $files.GetEnumerator()) {
+            if (Test-Path -LiteralPath $entry.Value -PathType Leaf) {
+              continue
+            }
+            if (-not (Test-Path -LiteralPath $entry.Key -PathType Leaf)) {
+              throw "Missing project file: $($entry.Key)"
+            }
+            New-Item -ItemType Directory -Force -Path (Split-Path $entry.Value) | Out-Null
+            Copy-Item -LiteralPath $entry.Key -Destination $entry.Value
+          }
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $compilerFolder = "${env:ProgramFiles(x86)}\Inno Setup 6"
+          if (-not (Test-Path -LiteralPath (Join-Path $compilerFolder 'ISCC.exe'))) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $compilerFolder | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Run the project's Windows build
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Upload Windows executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusX-Windows
+          path: |
+            dist/**/*.exe
+            Output/**/*.exe
+            installer/Output/**/*.exe
+          if-no-files-found: error
